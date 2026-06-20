@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "fastapi-payments-service"
+version = "1.0.0"
+description = "Async payment service with FastAPI, RabbitMQ, PostgreSQL"
+authors = ["Alexander Ternikov"]
+readme = "README.md"
+packages = [{ include = "app" }]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4"
+fastapi = "0.115.6"
+uvicorn = {extras = ["standard"], version = "^0.34.0"}
+pydantic = "2.13.4"
+pydantic-settings = "2.7.0"
+sqlalchemy = "2.0.36"
+asyncpg = "0.30.0"
+alembic = "1.18.4"
+faststream = {extras = ["cli","rabbit"], version = "0.7.1"}
+httpx = "0.28.1"
+python-dotenv = "1.0.1"
+greenlet = "3.5.2"
+orjson = "3.11.9"
+aio-pika = "9.6.2"
+tenacity = "9.1.4"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

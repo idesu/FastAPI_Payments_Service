@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: payments
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - SERVICE_TYPE=migration
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/payments
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - .:/app
+    restart: "no"
+    env_file:
+      - .env
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - SERVICE_TYPE=api
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/payments
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+
+  outbox_worker:
+    build: .
+    environment:
+      - SERVICE_TYPE=outbox_worker
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/payments
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+
+  consumer:
+    build: .
+    environment:
+      - SERVICE_TYPE=consumer
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/payments
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - WORKERS_COUNT=1
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+
+volumes:
+  postgres_data:
