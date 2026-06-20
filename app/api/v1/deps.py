@@ -3,12 +3,12 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db_session
+from app.core.database import db_helper
 from app.repositories.outbox import OutboxRepository
 from app.repositories.payment import PaymentRepository
 from app.services.payment import PaymentService
 
-SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
+SessionDep = Annotated[AsyncSession, Depends(db_helper.session_getter)]
 
 
 def get_payment_repository(session: SessionDep) -> PaymentRepository:
@@ -29,7 +29,9 @@ def get_payment_service(
     outbox_repo: OutboxRepositoryDep,
 ) -> PaymentService:
     return PaymentService(
-        session=session, payment_repo=payment_repo, outbox_repo=outbox_repo
+        session=session,
+        payment_repo=payment_repo,
+        outbox_repo=outbox_repo,
     )
 
 

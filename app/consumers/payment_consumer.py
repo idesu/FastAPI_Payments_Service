@@ -1,16 +1,12 @@
-import asyncio
-import datetime
 import logging
-import random
 
 from faststream import AckPolicy
 from faststream.rabbit import RabbitRouter, RabbitMessage
 
-from app.consumers.deps import PaymentServiceFastStreamDep, WebhookSenderDep
-from app.core.config import settings
+from app.consumers.deps import PaymentServiceFastStreamDep
 from app.core.exceptions import WebhookDeliveryError
 from app.core.rabbitmq import payments_queue, broker
-from app.models.payment import PaymentStatus
+from app.schemas.event import PaymentCreatedEvent
 
 router = RabbitRouter()
 logger = logging.getLogger(__name__)
@@ -24,56 +20,47 @@ async def process_payment(
     payload: dict,
     msg: RabbitMessage,
     service: PaymentServiceFastStreamDep,
-    webhook_sender: WebhookSenderDep,
 ):
+    try:
+        event = PaymentCreatedEvent(**payload)
+    except Exception as e:
+        logger.error(f"Invalid event format: {e}")
+        await msg.reject(requeue=False)  # payload невалидный, в DLQ
+        return
+
+    payment_id = event.payment_id
     retry_count = msg.headers.get("x-retry-count", 0)
 
+    logger.info(f"Received payment {payment_id}, retry {retry_count}")
+
     try:
-        # TODO: Добавить схему
-        payment_id = payload.get("payment_id")
-        webhook_url = payload.get("webhook_url")
-        logger.info(f"Processing payment {payment_id}")
-        status = await payment_emulation(payment_id)
-
-        # Обновление статуса в БД
-        await service.update_payment_status(payment_id, status)
-
-        # Отправка уведомлений через вебхук с ретраями
-        webhook_payload = {
-            "payment_id": str(payment_id),
-            "status": status.value,
-            "processed_at": datetime.datetime.now(datetime.UTC).isoformat(),
-        }
-        try:
-            await webhook_sender.send_with_retries(webhook_url, webhook_payload)
-        except Exception as e:
-            raise WebhookDeliveryError(f"Webhook failed for payment {payment_id}: {e}")
-
-        logger.info(f"Payment {payment_id} processed and webhook sent")
-        await msg.ack()
-        return
-    except Exception as e:
-        logger.error(f"Error processing payment {payload.get('payment_id')}: {e}")
-        if retry_count >= 3:
-            logger.error(f"Max retries exceeded for message. Sending to DLQ.")
-            await msg.reject(requeue=False)
-            return
-
-        new_retry_count = retry_count + 1
-        logger.warning(f"Retrying message (attempt {new_retry_count})...")
-
-        # Публикуем сообщение заново с обновленным заголовком
-        await broker.publish(
-            payload,
-            queue=settings.rmq_payments_queue,
-            headers={"x-retry-count": new_retry_count},
+        await service.process_payment(
+            payment_id=event.payment_id,
+            webhook_url=event.webhook_url,
+            amount=event.amount,
+            currency=event.currency,
         )
-        await msg.ack()
 
+        await msg.ack()  # всё успешно – подтверждаем
+        logger.info(f"Payment {payment_id} processed and acked")
 
-async def payment_emulation(*args, **kwargs):
-    delay = random.uniform(2.0, 5.0)
-    await asyncio.sleep(delay)
+    except (
+        WebhookDeliveryError
+    ) as e:  # сервис упал на этапе отправки, три неудачных попытки - в dlq
+        logger.error(f"Webhook error for {payment_id}: {e}")
+        await msg.reject(requeue=False)
 
-    success = random.random() < 0.9
-    return PaymentStatus.SUCCEEDED if success else PaymentStatus.FAILED
+    except Exception as e:
+        if retry_count >= 3:
+            logger.error(f"Max retries exceeded for {payment_id}")
+            await msg.reject(requeue=False)  # три попытки выполнены, в DLQ
+        else:
+            logger.exception(f"Unexpected error for {payment_id}: {e}")
+            await msg.nack(requeue=False)  # удаляем текущее
+            await broker.publish(  # и публикуем обратно с увеличенным счётчиком
+                event.model_dump(),
+                queue="payments.new",
+                exchange="payments",
+                routing_key="payment.created",
+                headers={"x-retry-count": retry_count + 1},
+            )

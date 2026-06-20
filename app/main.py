@@ -6,7 +6,7 @@ from fastapi.responses import ORJSONResponse
 
 from app.api.v1 import payments
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import db_helper
 
 logging.basicConfig(
     level=settings.logging.log_level_value,
@@ -17,7 +17,7 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    await engine.dispose()
+    await db_helper.dispose()
 
 
 app = FastAPI(

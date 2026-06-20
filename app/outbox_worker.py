@@ -1,9 +1,8 @@
 import asyncio
 import logging
-import signal
 
 from app.core.config import settings
-from app.core.database import AsyncSessionLocal, engine
+from app.core.database import db_helper
 from app.core.exceptions import OutboxPublishError
 from app.core.rabbitmq import broker
 from app.core.rabbitmq import declare_topology
@@ -18,7 +17,7 @@ shutdown_event = asyncio.Event()
 async def run_publisher():
     while not shutdown_event.is_set():
         try:
-            async with AsyncSessionLocal() as session:
+            async with db_helper.session_factory() as session:
                 publisher = OutboxPublisher(session)
                 count = await publisher.publish_pending_events()
                 if count:
@@ -50,7 +49,7 @@ async def main():
         await run_publisher()
     finally:
         await broker.stop()
-        await engine.dispose()
+        await db_helper.dispose()
         logger.info("Outbox worker gracefully stopped")
 
 
